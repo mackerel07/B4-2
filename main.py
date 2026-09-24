@@ -1,4 +1,4 @@
-"""A small, in-memory Git model used to study graphs, indexes, and sorting."""
+"""In-memory Mini Git for studying graphs, indexes, and sorting."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ T = TypeVar("T")
 
 
 class MiniGitError(Exception):
-    """An expected command or repository error that is safe to show to users."""
+    """A user-facing repository or command error."""
 
 
 @dataclass(frozen=True)
 class Commit:
-    """One immutable commit node in the directed acyclic commit graph."""
+    """An immutable node in the commit DAG."""
 
     hash: str
     message: str
@@ -29,7 +29,7 @@ class Commit:
 
 
 def merge_sort(items: Iterable[T], key: Callable[[T], object]) -> list[T]:
-    """Return a stable O(n log n) merge sort without standard sorting APIs."""
+    """Return a stable merge sort without using standard sorting APIs."""
 
     values = list(items)
     if len(values) < 2:
@@ -38,26 +38,22 @@ def merge_sort(items: Iterable[T], key: Callable[[T], object]) -> list[T]:
     middle = len(values) // 2
     left = merge_sort(values[:middle], key)
     right = merge_sort(values[middle:], key)
-    merged: list[T] = []
-    left_index = 0
-    right_index = 0
+    result: list[T] = []
+    left_index = right_index = 0
 
     while left_index < len(left) and right_index < len(right):
-        # Choosing the left item on equal keys is what makes this sort stable.
         if key(left[left_index]) <= key(right[right_index]):
-            merged.append(left[left_index])
+            result.append(left[left_index])
             left_index += 1
         else:
-            merged.append(right[right_index])
+            result.append(right[right_index])
             right_index += 1
 
-    merged.extend(left[left_index:])
-    merged.extend(right[right_index:])
-    return merged
+    return result + left[left_index:] + right[right_index:]
 
 
 class MiniGitRepository:
-    """Own repository state and provide graph, branch, index, and query operations."""
+    """Manage commits, branches, indexes, and graph queries."""
 
     def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
         self._clock = clock or datetime.now
@@ -72,22 +68,22 @@ class MiniGitRepository:
         self._next_hash = 1
 
     def initialize(self, user_name: str) -> None:
-        """Reset all in-memory state and create an empty main branch."""
+        """Reset the repository and create the main branch."""
 
         if not user_name.strip():
             raise MiniGitError("Invalid args")
         self.initialized = True
         self.current_user = user_name
         self.current_branch = "main"
-        self.commits.clear()
+        self.commits = {}
         self.branches = {"main": None}
-        self.keyword_index.clear()
-        self.author_index.clear()
-        self._commit_order.clear()
+        self.keyword_index = {}
+        self.author_index = {}
+        self._commit_order = {}
         self._next_hash = 1
 
     def create_branch(self, branch_name: str) -> None:
-        """Create a branch pointing at the current branch head."""
+        """Create a branch at the current HEAD."""
 
         self._require_initialized()
         if not branch_name.strip():
@@ -97,7 +93,7 @@ class MiniGitRepository:
         self.branches[branch_name] = self.branches[self.current_branch]
 
     def switch(self, branch_name: str) -> None:
-        """Move HEAD by selecting an existing branch."""
+        """Move HEAD to an existing branch."""
 
         self._require_initialized()
         if branch_name not in self.branches:
@@ -105,149 +101,134 @@ class MiniGitRepository:
         self.current_branch = branch_name
 
     def create_commit(self, message: str) -> Commit:
-        """Append a commit to HEAD and update both inverted indexes immediately."""
+        """Create a commit at HEAD and update its search indexes."""
 
         self._require_initialized()
         if not message.strip():
             raise MiniGitError("Invalid args")
 
-        parent = self.branches[self.current_branch]
-        parents = () if parent is None else (parent,)
-        commit_hash = self._new_hash()
+        head = self.branches[self.current_branch]
         commit = Commit(
-            hash=commit_hash,
+            hash=self._new_hash(),
             message=message,
             author=self.current_user,
             timestamp=self._clock(),
-            parents=parents,
+            parents=() if head is None else (head,),
         )
-        self.commits[commit_hash] = commit
-        self._commit_order[commit_hash] = len(self._commit_order)
-        self.branches[self.current_branch] = commit_hash
+        self.commits[commit.hash] = commit
+        self._commit_order[commit.hash] = len(self._commit_order)
+        self.branches[self.current_branch] = commit.hash
         self._index_commit(commit)
         return commit
 
     def topological_commits(self) -> list[Commit]:
-        """Return every commit with all parents placed before their children."""
+        """Return all commits with every parent before its children."""
 
         self._require_initialized()
-        children: dict[str, list[str]] = {commit_hash: [] for commit_hash in self.commits}
-        remaining_parents: dict[str, int] = {}
-
+        children = {commit_hash: [] for commit_hash in self.commits}
+        remaining = {
+            commit.hash: len(commit.parents)
+            for commit in self.commits.values()
+        }
         for commit in self.commits.values():
-            remaining_parents[commit.hash] = len(commit.parents)
-            for parent_hash in commit.parents:
-                children[parent_hash].append(commit.hash)
+            for parent in commit.parents:
+                children[parent].append(commit.hash)
 
-        ready = deque(
-            commit_hash
-            for commit_hash, count in remaining_parents.items()
-            if count == 0
-        )
-        output: list[Commit] = []
+        ready = deque(commit_hash for commit_hash, count in remaining.items() if count == 0)
+        result: list[Commit] = []
         while ready:
             commit_hash = ready.popleft()
-            output.append(self.commits[commit_hash])
-            for child_hash in children[commit_hash]:
-                remaining_parents[child_hash] -= 1
-                if remaining_parents[child_hash] == 0:
-                    ready.append(child_hash)
+            result.append(self.commits[commit_hash])
+            for child in children[commit_hash]:
+                remaining[child] -= 1
+                if remaining[child] == 0:
+                    ready.append(child)
 
-        if len(output) != len(self.commits):
+        if len(result) != len(self.commits):
             raise RuntimeError("Commit graph contains a cycle")
-        return output
+        return result
 
     def sorted_commits(self, criterion: str) -> list[Commit]:
-        """Sort all commits by date or author using the custom stable merge sort."""
+        """Sort commits by date or author with the custom merge sort."""
 
         commits = self.topological_commits()
         if criterion == "date":
-            return merge_sort(commits, key=lambda commit: commit.timestamp)
+            return merge_sort(commits, lambda commit: commit.timestamp)
         if criterion == "author":
-            return merge_sort(commits, key=lambda commit: commit.author.casefold())
+            return merge_sort(commits, lambda commit: commit.author.casefold())
         raise MiniGitError("Invalid args")
 
-    def shortest_path(self, start_hash: str, end_hash: str) -> list[str] | None:
-        """Find the lexicographically smallest shortest path using undirected BFS."""
+    def shortest_path(self, start: str, end: str) -> list[str] | None:
+        """Return the lexicographically smallest undirected shortest path."""
 
-        self._require_commit(start_hash)
-        self._require_commit(end_hash)
-        if start_hash == end_hash:
-            return [start_hash]
+        self._require_commit(start)
+        self._require_commit(end)
+        if start == end:
+            return [start]
 
-        neighbors: dict[str, list[str]] = {commit_hash: [] for commit_hash in self.commits}
+        neighbors = {commit_hash: [] for commit_hash in self.commits}
         for commit in self.commits.values():
-            for parent_hash in commit.parents:
-                neighbors[commit.hash].append(parent_hash)
-                neighbors[parent_hash].append(commit.hash)
+            for parent in commit.parents:
+                neighbors[commit.hash].append(parent)
+                neighbors[parent].append(commit.hash)
+        for commit_hash in neighbors:
+            neighbors[commit_hash] = merge_sort(neighbors[commit_hash], lambda value: value)
 
-        for commit_hash, adjacent in neighbors.items():
-            neighbors[commit_hash] = merge_sort(adjacent, key=lambda value: value)
-
-        queue: deque[str] = deque([start_hash])
-        visited = {start_hash}
-        previous: dict[str, str | None] = {start_hash: None}
+        queue = deque([start])
+        previous: dict[str, str | None] = {start: None}
         while queue:
-            current_hash = queue.popleft()
-            for next_hash in neighbors[current_hash]:
-                if next_hash in visited:
+            current = queue.popleft()
+            for neighbor in neighbors[current]:
+                if neighbor in previous:
                     continue
-                visited.add(next_hash)
-                previous[next_hash] = current_hash
-                if next_hash == end_hash:
-                    path = [end_hash]
+                previous[neighbor] = current
+                if neighbor == end:
+                    path = [end]
                     while previous[path[-1]] is not None:
                         path.append(previous[path[-1]])
                     path.reverse()
                     return path
-                queue.append(next_hash)
+                queue.append(neighbor)
         return None
 
     def ancestors(self, commit_hash: str) -> list[Commit]:
-        """Return all reachable parents, ordered so older ancestors appear first."""
+        """Return every reachable parent in parent-first order."""
 
         self._require_commit(commit_hash)
         found: set[str] = set()
         stack = list(self.commits[commit_hash].parents)
         while stack:
-            ancestor_hash = stack.pop()
-            if ancestor_hash in found:
-                continue
-            found.add(ancestor_hash)
-            stack.extend(self.commits[ancestor_hash].parents)
+            ancestor = stack.pop()
+            if ancestor not in found:
+                found.add(ancestor)
+                stack.extend(self.commits[ancestor].parents)
         return [commit for commit in self.topological_commits() if commit.hash in found]
 
     def search_keyword(self, keyword: str) -> list[Commit]:
-        """Use the token index to find commits containing every query token."""
+        """Find commits containing every normalized query token."""
 
         self._require_initialized()
         tokens = keyword.lower().split()
         if not tokens:
             raise MiniGitError("Invalid args")
-        candidate_hashes: set[str] | None = None
-        for token in tokens:
-            token_hashes = set(self.keyword_index.get(token, []))
-            candidate_hashes = (
-                token_hashes
-                if candidate_hashes is None
-                else candidate_hashes & token_hashes
-            )
-        return self._ordered_candidates(candidate_hashes or set())
+        matches = set(self.keyword_index.get(tokens[0], []))
+        for token in tokens[1:]:
+            matches &= set(self.keyword_index.get(token, []))
+        return self._ordered_commits(matches)
 
     def search_author(self, author: str) -> list[Commit]:
-        """Use the normalized author index instead of scanning every commit."""
+        """Find commits through the normalized author index."""
 
         self._require_initialized()
         if not author.strip():
             raise MiniGitError("Invalid args")
-        return self._ordered_candidates(set(self.author_index.get(author.casefold(), [])))
+        return self._ordered_commits(set(self.author_index.get(author.casefold(), [])))
 
-    def _ordered_candidates(self, commit_hashes: set[str]) -> list[Commit]:
-        candidates = [self.commits[commit_hash] for commit_hash in commit_hashes]
-        return merge_sort(candidates, key=lambda commit: self._commit_order[commit.hash])
+    def _ordered_commits(self, hashes: set[str]) -> list[Commit]:
+        commits = [self.commits[commit_hash] for commit_hash in hashes]
+        return merge_sort(commits, lambda commit: self._commit_order[commit.hash])
 
     def _new_hash(self) -> str:
-        # A monotonic counter makes collisions impossible during one session.
         while True:
             candidate = f"c{self._next_hash:06x}"
             self._next_hash += 1
@@ -270,18 +251,26 @@ class MiniGitRepository:
 
 
 def format_commit(commit: Commit) -> str:
-    """Format the fields required to identify a commit in command output."""
+    """Format one commit for CLI output."""
 
-    timestamp = commit.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-    return f"commit {commit.hash} ({commit.author}, {timestamp})\n  {commit.message}"
+    return (
+        f"commit {commit.hash} "
+        f"({commit.author}, {commit.timestamp:%Y-%m-%d %H:%M:%S})\n"
+        f"  {commit.message}"
+    )
 
 
 def format_commits(commits: list[Commit]) -> str:
-    """Format a commit list while keeping an empty result explicit."""
+    """Format a list of commits for CLI output."""
 
     if not commits:
         return "No commits"
     return "\n".join(format_commit(commit) for commit in commits)
+
+
+def _require_args(args: list[str], count: int) -> None:
+    if len(args) != count:
+        raise MiniGitError("Invalid args")
 
 
 def execute_command(repository: MiniGitRepository, line: str) -> str | None:
@@ -294,91 +283,71 @@ def execute_command(repository: MiniGitRepository, line: str) -> str | None:
     if not parts:
         return None
 
-    command = parts[0].upper()
-    args = parts[1:]
+    command, args = parts[0].upper(), parts[1:]
     try:
         if command in {"EXIT", "QUIT"}:
-            if args:
-                raise MiniGitError("Invalid args")
+            _require_args(args, 0)
             return "__EXIT__"
-
         if command == "INIT":
-            if len(args) != 1:
-                raise MiniGitError("Invalid args")
+            _require_args(args, 1)
             repository.initialize(args[0])
             return (
                 "Initialized repository.\n"
                 f"Current branch: {repository.current_branch}\n"
                 f"Current user: {repository.current_user}"
             )
-
         if command == "BRANCH":
-            if len(args) != 1:
-                raise MiniGitError("Invalid args")
+            _require_args(args, 1)
             repository.create_branch(args[0])
             return f"Created branch: {args[0]}"
-
         if command == "SWITCH":
-            if len(args) != 1:
-                raise MiniGitError("Invalid args")
+            _require_args(args, 1)
             repository.switch(args[0])
             return f"Switched to branch: {args[0]}"
-
         if command == "COMMIT":
-            if len(args) != 1:
-                raise MiniGitError("Invalid args")
+            _require_args(args, 1)
             commit = repository.create_commit(args[0])
             return f"[{repository.current_branch} {commit.hash}] {commit.message}"
-
         if command == "LOG":
             if not args:
                 return format_commits(repository.topological_commits())
-            if len(args) == 1 and args[0].lower().startswith("--sort-by="):
-                criterion = args[0].split("=", 1)[1].lower()
-                return format_commits(repository.sorted_commits(criterion))
-            raise MiniGitError("Invalid args")
-
+            _require_args(args, 1)
+            option, separator, criterion = args[0].partition("=")
+            if option.lower() != "--sort-by" or not separator:
+                raise MiniGitError("Invalid args")
+            return format_commits(repository.sorted_commits(criterion.lower()))
         if command == "PATH":
-            if len(args) != 2:
-                raise MiniGitError("Invalid args")
-            path = repository.shortest_path(args[0], args[1])
+            _require_args(args, 2)
+            path = repository.shortest_path(*args)
             return "No path" if path is None else "Path: " + " -> ".join(path)
-
         if command == "ANCESTORS":
-            if len(args) != 1:
-                raise MiniGitError("Invalid args")
+            _require_args(args, 1)
             return format_commits(repository.ancestors(args[0]))
-
         if command == "SEARCH":
-            if len(args) != 1:
-                raise MiniGitError("Invalid args")
-            if args[0].lower().startswith("--author="):
-                author = args[0].split("=", 1)[1]
+            _require_args(args, 1)
+            option, separator, author = args[0].partition("=")
+            if separator and option.lower() == "--author":
                 return format_commits(repository.search_author(author))
             return format_commits(repository.search_keyword(args[0]))
-
         return f"Unknown command: {parts[0]}"
     except MiniGitError as error:
         return str(error)
 
 
-def run_repl(
-    input_stream: TextIO = sys.stdin,
-    output_stream: TextIO = sys.stdout,
-) -> None:
-    """Run the mini-git prompt until EOF, EXIT, or QUIT."""
+def run_repl(input_stream: TextIO = sys.stdin, output_stream: TextIO = sys.stdout) -> None:
+    """Read and execute commands until EOF, EXIT, or QUIT."""
 
     repository = MiniGitRepository()
     while True:
         output_stream.write("mini-git> ")
         output_stream.flush()
         line = input_stream.readline()
-        if line == "":
+        if not line:
             output_stream.write("\n")
-            break
+            return
         result = execute_command(repository, line)
         if result == "__EXIT__":
-            break
+            return
         if result is not None:
             output_stream.write(result + "\n")
 
