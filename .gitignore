@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+tmp/
+
+# The assignment handout is an input reference, not a repository deliverable.
+미션*.pdf
+미션*.pdf
