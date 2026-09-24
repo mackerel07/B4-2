@@ -67,3 +67,7 @@ python3 -m unittest -v
 ```
 
 테스트는 초기화, 브랜치/HEAD, 부모 우선 로그, 경로와 단절 그래프, 조상, 역색인, 안정 정렬, CLI 문법과 REPL 종료를 검증합니다.
+
+## 개념서
+
+실제 Git/GitHub의 staging과 object 흐름부터 `main.py` 코드 리뷰, 위상 정렬, BFS/DFS, 안정 병합 정렬, 역색인 및 평가 질문 답변까지 정리한 문서는 [`output/pdf/mini_git_concept_guide_ko.pdf`](output/pdf/mini_git_concept_guide_ko.pdf)에서 확인할 수 있습니다.

@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .DS_Store
 tmp/
+/mini_git_concept_guide_ko.pdf
 
 # The assignment handout is an input reference, not a repository deliverable.
 미션*.pdf
